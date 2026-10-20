@@ -103,7 +103,7 @@ class LLMClient:
             openai_transport(
                 model,
                 temperature=float(os.environ.get("AGENT_LLM_TEMPERATURE", "0.4")),
-                max_tokens=_env_int("AGENT_LLM_MAX_OUTPUT_TOKENS", 4096),
+                max_tokens=_env_int("AGENT_LLM_MAX_OUTPUT_TOKENS", 6144),
                 timeout_s=float(os.environ.get("AGENT_LLM_TIMEOUT_S", "180")),
                 no_think=os.environ.get("AGENT_LLM_NO_THINK", "").strip() in ("1", "true", "yes"),
             ),
@@ -164,14 +164,16 @@ class LLMClient:
                 return parse_json_response(text, schema)
             except LLMBadResponse as exc:
                 last_error = str(exc)
+                if not _THINK_RE.sub("", text).strip():
+                    # Qwen spent the whole max_tokens on reasoning and wrote no answer
+                    repair = ("You ran out of output tokens while thinking and gave no answer. Answer right away "
+                              "with ONE compact JSON object only, matching the requested format.\n/no_think")
+                else:
+                    repair = ("Your answer could not be used: " + last_error[:1500]
+                              + "\nReply again with ONE valid JSON object only, matching the requested format.")
                 messages = messages + [
                     {"role": "assistant", "content": text[-4000:]},
-                    {
-                        "role": "user",
-                        "content": "Your answer could not be used: "
-                        + last_error[:1500]
-                        + "\nReply again with ONE valid JSON object only, matching the requested format.",
-                    },
+                    {"role": "user", "content": repair},
                 ]
         raise LLMBadResponse(last_error)
 
@@ -210,7 +212,7 @@ def openai_transport(
     model: str,
     *,
     temperature: float = 0.4,
-    max_tokens: int = 4096,
+    max_tokens: int = 6144,
     timeout_s: float = 180.0,
     no_think: bool = False,
     retries: int = 1,

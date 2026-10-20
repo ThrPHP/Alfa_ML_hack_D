@@ -74,7 +74,7 @@ Each CV run is capped at `min(time left − reserve, AGENT_MAX_EXPERIMENT_S=1800
 | `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_BASE_URL` | — | LLM endpoint, same as `baseline.py`; any OpenAI-compatible server |
 | `AGENT_DISABLE_LLM` | off | `1` = run the no-LLM playbook only |
 | `AGENT_LLM_MAX_CALLS` / `AGENT_LLM_MAX_TOKENS` | 40 / 400000 | per-task LLM budget (team limit is daily and shared) |
-| `AGENT_LLM_MAX_OUTPUT_TOKENS` | 4096 | max tokens per answer |
+| `AGENT_LLM_MAX_OUTPUT_TOKENS` | 6144 | max tokens per answer (Qwen reasoning included; an answer cut off while reasoning is retried once with `/no_think`) |
 | `AGENT_LLM_TEMPERATURE` | 0.4 | |
 | `AGENT_LLM_TIMEOUT_S` | 180 | per request |
 | `AGENT_LLM_NO_THINK` | off | `1` appends `/no_think` (Qwen3 soft switch) to save tokens |

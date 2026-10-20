@@ -129,3 +129,15 @@ def test_usage_counts_the_cost_reported_by_the_proxy():
     client = LLMClient(lambda messages: ('{"metric_name": "rmse"}', 100, 20, 0.25))
     client.complete_json("s", "u", TaskUnderstanding)
     assert client.usage.cost == 0.25 and client.usage.log[0]["cost"] == 0.25
+
+
+def test_an_answer_cut_off_while_reasoning_is_retried_without_thinking():
+    seen = []
+
+    def transport(messages):
+        seen.append(messages)
+        return ("" if len(seen) == 1 else '{"metric_name": "rmse"}'), 100, 6144
+
+    client = LLMClient(transport)
+    assert client.complete_json("s", "u", TaskUnderstanding).metric_name == "rmse"
+    assert seen[1][-1]["content"].endswith("/no_think") and "ran out of output tokens" in seen[1][-1]["content"]
