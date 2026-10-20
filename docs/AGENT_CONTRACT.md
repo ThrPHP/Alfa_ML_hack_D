@@ -113,5 +113,5 @@ Each CV run is capped at `min(time left − reserve, AGENT_MAX_EXPERIMENT_S=1800
 
 | task | validation | Tima's best (examples/) | agent playbook |
 |---|---|---|---|
-| regression, RMSE ↓ | time_split on `Year_Factor` | 46.09 (CatBoost + log1p) | **43.21** (LightGBM regularized + log1p) |
-| multiclass, Macro F1 ↑ | stratified 3-fold | 0.537 (CatBoost, 5-fold) | **0.573** (LightGBM seed) |
+| regression, RMSE ↓ | time_split on `Year_Factor` | 46.09 (CatBoost + log1p) | **42.97** (LightGBM regularized + log1p, local search; 43.21 before it) |
+| multiclass, Macro F1 ↑ | stratified 3-fold | 0.537 (CatBoost, 5-fold) | **0.580** (LightGBM seed; CatBoost seed 0.529) |

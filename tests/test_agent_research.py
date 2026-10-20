@@ -29,7 +29,8 @@ def test_research_without_llm_writes_a_valid_submission_and_report(regression_da
     test = pd.read_csv(regression_dataset["test"])
     assert list(sub.columns) == ["id", "target"] and sub["id"].tolist() == test["id"].tolist()
     assert report.submitted_experiment_id == report.best_experiment_id
-    assert {j["source"] for j in report.journal} == {"seed", "playbook"}
+    assert {j["source"] for j in report.journal} <= {"seed", "playbook", "local-search"}
+    assert {"seed", "playbook"} <= {j["source"] for j in report.journal}
     assert (tmp_path / "work" / "report.md").is_file()
 
 
