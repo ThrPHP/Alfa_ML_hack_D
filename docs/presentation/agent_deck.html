@@ -320,11 +320,11 @@ td.best { font-weight: 600; color: var(--core); }
         <thead><tr><th>задача</th><th>у Тимы</th><th>без LLM</th><th>с LLM</th><th>LLM, ₽</th></tr></thead>
         <tbody>
           <tr><td>регрессия, RMSE ↓ (15 мин)</td><td>46.09</td><td>42.97</td><td class="best">41.86</td><td>4.68</td></tr>
-          <tr id="cls-row"><td>мультикласс, Macro F1 ↑</td><td>0.537</td><td>0.580</td><td>0.581 (15 мин) · <span class="tag wait">повтор 30 мин идёт</span></td><td>6.06</td></tr>
+          <tr id="cls-row"><td>мультикласс, Macro F1 ↑</td><td>0.537</td><td>0.580</td><td class="best">0.6165 (30 мин)</td><td>2.72</td></tr>
         </tbody>
       </table>
     </div>
-    <p class="foot">Регрессию проверяем на одном фолде (последний год), поэтому часть выигрыша local search может быть подгонкой под этот фолд.</p>
+    <p class="foot">Мультикласс: главный шаг сделала LLM в раунде 1 — XGBoost с <code>max_cat_threshold</code>, 0.581 → 0.616. Регрессию проверяем на одном фолде (последний год), поэтому часть выигрыша local search может быть подгонкой под этот фолд.</p>
   </section>
 
   <section class="slide" tabindex="-1" aria-label="Слайд 10">
@@ -363,6 +363,7 @@ td.best { font-weight: 600; color: var(--core); }
     <div class="eyebrow"><span>Дальше</span><span>12</span></div>
     <h2>Следующие шаги</h2>
     <div class="grid">
+      <div class="cell l"><h3>Не звать LLM впустую</h3><p>В конце прогона LLM трижды предлагала гипотезы, на которые уже не хватало времени. Перед раундом сверять остаток с длительностью эксперимента.</p></div>
       <div class="cell l"><h3>LLM все 3 часа</h3><p>Сейчас после 4 раундов без рекорда LLM уходит насовсем, на регрессии это случилось на 6-й минуте. Нужно возвращаться к ней после playbook и local search.</p></div>
       <div class="cell c"><h3>Дешевле стартовый CatBoost</h3><p>На мультиклассе он занимает 8 минут и проигрывает LightGBM на обеих задачах.</p></div>
       <div class="cell c"><h3>Устойчивая валидация</h3><p>Несколько seed или второй период для регрессии, чтобы перебор параметров не подгонялся под один фолд.</p></div>
