@@ -4,7 +4,8 @@
 (цикл AutoResearch). Команда из трёх человек; **в этом форке моя роль — LLM-агент (`agent/`)**,
 ML-ядро (`ml_core/`) пишет Тима, инфраструктуру (`solution.py`, ZIP) — третий участник.
 
-**Перед работой прочитай `project_context/README.md`** — там кейс, роли, архитектура, решения, статус и план.
+**Перед работой прочитай `project_context/README.md` и `project_context/pitfalls.md`** — там кейс, роли, архитектура,
+решения, статус, план и места, где раньше терялись время и контекст. PDF кейса не перечитывай — выжимка в `case.md`.
 
 ## Правила
 - Ветка: `claude/fervent-lamport-31kwal`. Коммиты и push только в неё, PR — только по просьбе пользователя.
@@ -19,7 +20,9 @@ ML-ядро (`ml_core/`) пишет Тима, инфраструктуру (`sol
 uv venv -p 3.12 .venv && uv pip install -p .venv/bin/python numpy==1.26.4 scipy==1.12.0 pandas==2.2.3 \
   pyarrow==19.0.1 joblib==1.4.2 threadpoolctl==3.6.0 scikit-learn==1.5.2 catboost==1.2.8 lightgbm==4.6.0 \
   xgboost==2.1.4 pydantic==2.10.6 openai==1.68.2 httpx==0.28.1 tenacity==9.0.0 python-dotenv==1.0.1 pytest
-.venv/bin/python -m pytest tests/ -q -p no:warnings            # ~3 мин, 51 тест
+.venv/bin/python -m pytest tests/ -q -p no:warnings --deselect tests/test_agent_research.py  # ~25 с, в цикле правок
+.venv/bin/python -m pytest tests/ -q -p no:warnings            # ~2 мин, 51 тест, перед коммитом
 .venv/bin/python scripts/run_agent_local.py "Base/Datasets/Регрессия/task.md" --budget-s 600 [--no-llm]
 ```
-Не запускай тесты параллельно с замерами времени агента: на 4 ядрах они мешают друг другу.
+Не запускай тесты параллельно с прогонами агента (замедление в 2–3 раза, искажённые замеры). Быстрые проверки —
+на регрессии (`--budget-s 300`, ~2 мин); длинные прогоны — через `run_in_background`, не ждать через `pgrep -f`.
