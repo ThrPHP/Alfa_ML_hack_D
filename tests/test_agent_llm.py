@@ -70,36 +70,59 @@ def test_budget_exceeded_disables_the_llm_after_one_call():
     assert len(calls) == 1
 
 
-def test_openai_transport_does_not_retry_a_spent_budget(monkeypatch):
+class _FakeOpenAI:
+    """Stands in for openai.OpenAI: create() pops the next item of `script` (an exception or a chunk list)."""
+
+    script: list = []
+    calls: list = []
+
+    def __init__(self, **kwargs):
+        assert kwargs["max_retries"] == 0
+        self.chat = self
+        self.completions = self
+
+    def create(self, **kwargs):
+        assert kwargs["stream"] is True
+        type(self).calls.append(kwargs)
+        item = type(self).script.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return iter(item)
+
+
+def _chunk(content=None, usage=None):
+    from types import SimpleNamespace
+
+    choices = [SimpleNamespace(delta=SimpleNamespace(content=content))] if usage is None else []
+    return SimpleNamespace(choices=choices, usage=usage)
+
+
+def test_openai_transport_streams_and_does_not_retry_a_spent_budget(monkeypatch):
+    from types import SimpleNamespace
+
     import httpx
     import openai
 
     from agent.llm import openai_transport
 
-    calls = []
+    monkeypatch.setattr(openai, "OpenAI", _FakeOpenAI)
     response = httpx.Response(429, request=httpx.Request("POST", "http://proxy/v1/chat/completions"))
-    errors = [openai.RateLimitError("Budget has been exceeded", response=response, body=None)]
-
-    class FakeOpenAI:
-        def __init__(self, **kwargs):
-            assert kwargs["max_retries"] == 0
-            self.chat = self
-            self.completions = self
-
-        def create(self, **kwargs):
-            calls.append(1)
-            raise errors[0]
-
-    monkeypatch.setattr(openai, "OpenAI", FakeOpenAI)
+    messages = [{"role": "user", "content": "hi"}]
     transport = openai_transport("m", retries=2, retry_wait_s=0)
-    with pytest.raises(openai.RateLimitError):
-        transport([{"role": "user", "content": "hi"}])
-    assert len(calls) == 1
 
-    errors[0] = openai.RateLimitError("Too many requests", response=response, body=None)
+    usage = SimpleNamespace(prompt_tokens=10, completion_tokens=3, cost=0.5)
+    _FakeOpenAI.calls, _FakeOpenAI.script = [], [[_chunk('{"a"'), _chunk(None), _chunk(": 1}"), _chunk(usage=usage)]]
+    assert transport(messages) == ('{"a": 1}', 10, 3, 0.5)
+
+    _FakeOpenAI.calls, _FakeOpenAI.script = [], [openai.RateLimitError("Budget has been exceeded", response=response, body=None)]
     with pytest.raises(openai.RateLimitError):
-        transport([{"role": "user", "content": "hi"}])
-    assert len(calls) == 1 + 3  # an ordinary 429 is retried
+        transport(messages)
+    assert len(_FakeOpenAI.calls) == 1
+
+    busy = openai.RateLimitError("Too many requests", response=response, body=None)
+    _FakeOpenAI.calls, _FakeOpenAI.script = [], [busy, busy, [_chunk("{}")]]
+    assert transport(messages)[0] == "{}"  # an ordinary 429 is retried; no usage chunk -> estimate
+    assert len(_FakeOpenAI.calls) == 3
 
 
 def test_usage_counts_the_cost_reported_by_the_proxy():

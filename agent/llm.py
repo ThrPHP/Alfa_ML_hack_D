@@ -213,36 +213,51 @@ def openai_transport(
     max_tokens: int = 4096,
     timeout_s: float = 180.0,
     no_think: bool = False,
-    retries: int = 2,
+    retries: int = 1,
     retry_wait_s: float = 2.0,
 ) -> Transport:
     """Transport over the `openai` SDK (reads OPENAI_API_KEY / OPENAI_BASE_URL itself).
 
+    Answers are streamed: the organizers' proxy cuts a non-streamed request at
+    ~30 s ("upstream request failed"), and Qwen's reasoning alone can take that long.
     The SDK's own retries are off: it would also retry a 429 "Budget has been
-    exceeded". Network errors, timeouts, 5xx and other 429s get `retries` more tries.
+    exceeded". Network errors, timeouts, 5xx and other 429s get `retries` more tries
+    (few: a failed attempt is still billed for what the model generated).
     """
     from openai import APIConnectionError, InternalServerError, OpenAI, RateLimitError
 
     client = OpenAI(timeout=timeout_s, max_retries=0)
 
-    def create(messages: list[dict]):
+    def stream_once(messages: list[dict]) -> tuple[str, object]:
+        stream = client.chat.completions.create(
+            model=model, messages=messages, temperature=temperature, max_tokens=max_tokens,
+            stream=True, stream_options={"include_usage": True},
+        )
+        parts, usage = [], None
+        for chunk in stream:
+            if chunk.usage is not None:
+                usage = chunk.usage
+            if chunk.choices and chunk.choices[0].delta.content:
+                parts.append(chunk.choices[0].delta.content)
+        return "".join(parts), usage
+
+    def create(messages: list[dict]) -> tuple[str, object]:
         for attempt in range(retries + 1):
             try:
-                return client.chat.completions.create(
-                    model=model, messages=messages, temperature=temperature, max_tokens=max_tokens
-                )
+                return stream_once(messages)
             except (APIConnectionError, InternalServerError, RateLimitError) as exc:
                 if attempt >= retries or is_budget_exceeded(exc):
                     raise
                 time.sleep(retry_wait_s * 2**attempt)
+        raise AssertionError("unreachable")
 
     def transport(messages: list[dict]) -> tuple[str, int, int, float]:
         if no_think:
             messages = [dict(m) for m in messages]
             messages[-1]["content"] = messages[-1]["content"] + "\n/no_think"
-        response = create(messages)
-        text = response.choices[0].message.content or ""
-        usage = response.usage
+        text, usage = create(messages)
+        if usage is None:  # proxy sent no usage chunk: rough estimate, no cost
+            return text, sum(len(m["content"]) for m in messages) // 4, len(text) // 4, 0.0
         return (
             text,
             int(getattr(usage, "prompt_tokens", 0) or 0),
