@@ -1,0 +1,20 @@
+# Local virtual environments (do not commit — rebuild with `pip install -r Base/requirements.txt`)
+.venv/
+.venv_test/
+venv/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Stray debug output from ad-hoc runs outside examples/ (CatBoost writes this
+# in the current directory by default; keep only examples/runs/ as the real,
+# intentional experiment evidence)
+/catboost_info/
+/runs/

@@ -1,0 +1,211 @@
+"""run_experiment(): fit + honestly evaluate one ExperimentConfig.
+
+Never raises for an agent-driven failure (bad model name, a library missing
+from this environment, a fit that throws, a config mismatched with its
+ValidationPlan) — every one of those comes back as an ExperimentResult with
+status in {"failed", "unsupported", "timeout"} and a short error_message, so
+a calling agent can test a bad hypothesis without wrapping every call in
+try/except. It CAN still raise pydantic.ValidationError, but only while
+*constructing* an ExperimentConfig/TaskSpec, before run_experiment is ever
+called — that's deliberate fail-fast validation of the config shape itself.
+
+Time budget is soft: checked once per fold, not inside a fold's .fit() call.
+A fold whose own fit() hangs or runs long cannot be interrupted from here —
+if that risk matters for a given model/hyperparameter combination, the
+infrastructure layer needs to run run_experiment in a subprocess with an OS
+-level timeout. See docs/CONTRACTS.md.
+"""
+
+from __future__ import annotations
+
+import time
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+from ml_core import model_registry
+from ml_core.contracts import DataProfile, ExperimentConfig, ExperimentResult, TaskSpec, ValidationPlan
+from ml_core.errors import UnsupportedTaskTypeError
+from ml_core.experiment_log import record as log_record
+from ml_core.io_utils import config_hash
+from ml_core.metrics import build_task_metric_fn
+from ml_core.preprocessing import (
+    CategoryVocabulary,
+    build_linear_preprocessor,
+    forward_target_transform,
+    inverse_target_transform,
+    prepare_native_frame,
+    split_feature_columns,
+)
+from ml_core.validation import load_fold_indices
+
+
+def _encode_labels(y: pd.Series, class_labels: list[str]) -> np.ndarray:
+    label_to_int = {label: i for i, label in enumerate(class_labels)}
+    unknown = set(y.astype(str).unique()) - set(label_to_int)
+    if unknown:
+        raise ValueError(f"train target contains labels not in TaskSpec.class_labels: {unknown}")
+    return y.astype(str).map(label_to_int).to_numpy()
+
+
+def run_experiment(
+    task_spec: TaskSpec,
+    experiment_config: ExperimentConfig,
+    validation_plan: ValidationPlan,
+    data_profile: DataProfile,
+    train_path: str | Path,
+    experiments_dir: str | Path | None = None,
+) -> ExperimentResult:
+    start = time.monotonic()
+    experiment_id = experiment_config.experiment_id or config_hash(
+        experiment_config.model_dump(mode="json", exclude={"experiment_id"})
+    )
+    n_requested = validation_plan.n_splits
+
+    def _result(status: str, **kwargs) -> ExperimentResult:
+        res = ExperimentResult(
+            status=status,  # type: ignore[arg-type]
+            experiment_id=experiment_id,
+            metric_name=task_spec.metric_name,
+            greater_is_better=task_spec.greater_is_better,
+            validation_id=validation_plan.validation_id,
+            n_folds_requested=n_requested,
+            duration_s=time.monotonic() - start,
+            config=experiment_config,
+            **kwargs,
+        )
+        if experiments_dir is not None:
+            log_record(res, experiments_dir)
+        return res
+
+    if experiment_config.validation_id != validation_plan.validation_id:
+        return _result(
+            "failed",
+            error_message=(
+                f"experiment_config.validation_id={experiment_config.validation_id!r} does not match "
+                f"validation_plan.validation_id={validation_plan.validation_id!r}"
+            ),
+        )
+
+    try:
+        metric_fn = build_task_metric_fn(task_spec)
+    except Exception as exc:  # metric/direction contract mismatch
+        return _result("failed", error_message=f"{type(exc).__name__}: {exc}")
+
+    # Fail fast (before touching data) if the model/library isn't usable here.
+    try:
+        model_registry.build_model(
+            experiment_config.model_name,
+            task_spec.task_type,
+            experiment_config.hyperparameters,
+            experiment_config.random_seed,
+            experiment_config.n_jobs,
+        )
+    except UnsupportedTaskTypeError as exc:
+        return _result("unsupported", error_message=str(exc))
+    except Exception as exc:
+        return _result("failed", error_message=f"model construction failed: {type(exc).__name__}: {exc}")
+
+    if (
+        model_registry.requires_linear_mode(experiment_config.model_name)
+        and experiment_config.preprocessing.mode == "native"
+    ):
+        return _result(
+            "failed",
+            error_message=(
+                f"model_name={experiment_config.model_name!r} needs preprocessing.mode='linear' "
+                "(it cannot be fit on raw NaN / pandas-category input) — got mode='native'."
+            ),
+        )
+
+    try:
+        fold_val_idx = load_fold_indices(validation_plan, train_path)
+        df = pd.read_csv(train_path)
+    except Exception as exc:
+        return _result("failed", error_message=f"{type(exc).__name__}: {exc}")
+
+    feature_cols = split_feature_columns(data_profile.columns, experiment_config.preprocessing)
+    diagnostics: dict = {
+        "n_rows": len(df),
+        "n_numeric_features": len(feature_cols.numeric),
+        "n_categorical_features": len(feature_cols.categorical),
+        "n_high_cardinality_features": len(feature_cols.high_card_categorical),
+        "fold_warnings": [],
+    }
+
+    try:
+        if task_spec.task_type == "classification":
+            y_all = _encode_labels(df[task_spec.target_column], task_spec.class_labels or [])
+        else:
+            y_all = df[task_spec.target_column].to_numpy(dtype=float)
+    except Exception as exc:
+        return _result("failed", error_message=f"target encoding failed: {type(exc).__name__}: {exc}")
+
+    deadline = start + experiment_config.time_budget_s if experiment_config.time_budget_s else None
+    all_idx = np.arange(len(df))
+    fold_metrics: list[float] = []
+
+    try:
+        for i, val_idx in enumerate(fold_val_idx):
+            if deadline is not None and time.monotonic() > deadline:
+                diagnostics["fold_warnings"].append(
+                    f"stopped after {i}/{n_requested} folds: time_budget_s exceeded"
+                )
+                break
+
+            train_idx = np.setdiff1d(all_idx, val_idx, assume_unique=False)
+            fold_train, fold_val = df.iloc[train_idx], df.iloc[val_idx]
+            y_train, y_val = y_all[train_idx], y_all[val_idx]
+
+            mode = experiment_config.preprocessing.mode
+            if mode == "native":
+                vocab = CategoryVocabulary().fit(fold_train, feature_cols.categorical)
+                X_train = prepare_native_frame(fold_train, feature_cols, vocab, experiment_config.model_name)
+                X_val = prepare_native_frame(fold_val, feature_cols, vocab, experiment_config.model_name)
+                cat_names = feature_cols.categorical
+            else:
+                preproc = build_linear_preprocessor(feature_cols, experiment_config.preprocessing)
+                X_train = preproc.fit_transform(fold_train)
+                X_val = preproc.transform(fold_val)
+                cat_names = None
+
+            model = model_registry.build_model(
+                experiment_config.model_name,
+                task_spec.task_type,
+                experiment_config.hyperparameters,
+                experiment_config.random_seed,
+                experiment_config.n_jobs,
+                cat_feature_names=cat_names,
+            )
+
+            if task_spec.task_type == "regression":
+                y_fit = forward_target_transform(y_train, experiment_config.preprocessing.target_transform)
+                model.fit(X_train, y_fit)
+                pred_val = model.predict(X_val)
+                pred_val = inverse_target_transform(pred_val, experiment_config.preprocessing.target_transform)
+            else:
+                model.fit(X_train, y_train)
+                pred_val = model.predict(X_val)
+
+            fold_metrics.append(float(metric_fn(y_val, pred_val)))
+    except Exception as exc:
+        return _result(
+            "failed",
+            error_message=f"{type(exc).__name__}: {exc}",
+            fold_metrics=[float(x) for x in fold_metrics],
+            n_folds_completed=len(fold_metrics),
+            diagnostics=diagnostics,
+        )
+
+    if not fold_metrics:
+        return _result("timeout", diagnostics=diagnostics)
+
+    return _result(
+        "success",
+        metric_value=float(np.mean(fold_metrics)),
+        metric_std=float(np.std(fold_metrics)),
+        fold_metrics=[float(x) for x in fold_metrics],
+        n_folds_completed=len(fold_metrics),
+        diagnostics=diagnostics,
+    )
