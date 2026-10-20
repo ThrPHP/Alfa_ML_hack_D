@@ -52,3 +52,57 @@ def test_from_env_returns_none_without_configuration(monkeypatch):
     monkeypatch.setenv("OPENAI_MODEL", "m")
     monkeypatch.setenv("AGENT_DISABLE_LLM", "1")
     assert LLMClient.from_env() is None
+
+
+def test_budget_exceeded_disables_the_llm_after_one_call():
+    calls = []
+
+    def spent(messages):
+        calls.append(1)
+        raise RuntimeError("Error code: 400 - {'error': {'message': 'Budget has been exceeded! Current cost: 600'}}")
+
+    client = LLMClient(spent, max_consecutive_errors=3)
+    with pytest.raises(LLMUnavailable):
+        client.complete_json("s", "u", TaskUnderstanding)
+    assert not client.available and "budget exceeded" in client.disabled_reason
+    with pytest.raises(LLMUnavailable):
+        client.complete_json("s", "u", TaskUnderstanding)
+    assert len(calls) == 1
+
+
+def test_openai_transport_does_not_retry_a_spent_budget(monkeypatch):
+    import httpx
+    import openai
+
+    from agent.llm import openai_transport
+
+    calls = []
+    response = httpx.Response(429, request=httpx.Request("POST", "http://proxy/v1/chat/completions"))
+    errors = [openai.RateLimitError("Budget has been exceeded", response=response, body=None)]
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):
+            assert kwargs["max_retries"] == 0
+            self.chat = self
+            self.completions = self
+
+        def create(self, **kwargs):
+            calls.append(1)
+            raise errors[0]
+
+    monkeypatch.setattr(openai, "OpenAI", FakeOpenAI)
+    transport = openai_transport("m", retries=2, retry_wait_s=0)
+    with pytest.raises(openai.RateLimitError):
+        transport([{"role": "user", "content": "hi"}])
+    assert len(calls) == 1
+
+    errors[0] = openai.RateLimitError("Too many requests", response=response, body=None)
+    with pytest.raises(openai.RateLimitError):
+        transport([{"role": "user", "content": "hi"}])
+    assert len(calls) == 1 + 3  # an ordinary 429 is retried
+
+
+def test_usage_counts_the_cost_reported_by_the_proxy():
+    client = LLMClient(lambda messages: ('{"metric_name": "rmse"}', 100, 20, 0.25))
+    client.complete_json("s", "u", TaskUnderstanding)
+    assert client.usage.cost == 0.25 and client.usage.log[0]["cost"] == 0.25

@@ -356,7 +356,8 @@ class _Researcher:
             return self.report.llm_usage
         u = self.llm.usage
         return {"calls": u.calls, "failed_calls": u.failed_calls, "prompt_tokens": u.prompt_tokens,
-                "completion_tokens": u.completion_tokens, "seconds": round(u.seconds, 1), "log": u.log}
+                "completion_tokens": u.completion_tokens, "cost": round(u.cost, 4), "seconds": round(u.seconds, 1),
+                "log": u.log}
 
     def _sandbox(self) -> FeatureSandbox:
         if self.sandbox is None:

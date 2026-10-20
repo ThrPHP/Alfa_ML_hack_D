@@ -10,7 +10,9 @@ parse/validation error the model gets one short repair round with the error
 text. Calls and tokens are counted against a per-task budget (the team's
 LLM limit is shared and daily), and once that budget is spent — or if the
 endpoint is unreachable — the client raises LLMUnavailable, which the agent
-treats as "continue without the LLM", never as a crash.
+treats as "continue without the LLM", never as a crash. The proxy's
+"Budget has been exceeded" error (the team's daily limit is spent) disables
+the LLM at once, without retries.
 """
 
 from __future__ import annotations
@@ -26,8 +28,9 @@ from pydantic import BaseModel, ValidationError
 
 T = TypeVar("T", bound=BaseModel)
 
-# transport(messages) -> (text, prompt_tokens, completion_tokens)
-Transport = Callable[[list[dict]], tuple[str, int, int]]
+# transport(messages) -> (text, prompt_tokens, completion_tokens[, cost])
+# cost is what the proxy reports in usage.cost (0.0 when it reports nothing)
+Transport = Callable[[list[dict]], tuple]
 
 
 class LLMUnavailable(Exception):
@@ -44,12 +47,22 @@ class LLMUsage:
     failed_calls: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    cost: float = 0.0
     seconds: float = 0.0
     log: list[dict] = field(default_factory=list)
 
     @property
     def total_tokens(self) -> int:
         return self.prompt_tokens + self.completion_tokens
+
+
+_BUDGET_RE = re.compile(r"budget\s+has\s+been\s+exceeded|budget_exceeded", re.IGNORECASE)
+
+
+def is_budget_exceeded(exc: BaseException) -> bool:
+    """The team's daily LLM limit is spent: retrying is pointless until the reset."""
+    texts = [str(exc), str(getattr(exc, "body", "") or "")]
+    return any(_BUDGET_RE.search(t) for t in texts)
 
 
 def _env_int(name: str, default: int) -> int:
@@ -117,9 +130,12 @@ class LLMClient:
         self._check_budget()
         start = time.monotonic()
         try:
-            text, prompt_tokens, completion_tokens = self._transport(messages)
+            text, prompt_tokens, completion_tokens, *rest = self._transport(messages)
         except Exception as exc:
             self.usage.failed_calls += 1
+            if is_budget_exceeded(exc):
+                self.disabled_reason = f"LLM budget exceeded: {str(exc)[:300]}"
+                raise LLMUnavailable(self.disabled_reason) from exc
             self._consecutive_errors += 1
             if self._consecutive_errors >= self.max_consecutive_errors:
                 self.disabled_reason = f"{self._consecutive_errors} consecutive LLM errors, last: {type(exc).__name__}: {exc}"
@@ -129,9 +145,12 @@ class LLMClient:
         self.usage.calls += 1
         self.usage.prompt_tokens += prompt_tokens
         self.usage.completion_tokens += completion_tokens
+        cost = float(rest[0] or 0.0) if rest else 0.0
+        self.usage.cost += cost
         self.usage.seconds += elapsed
         self.usage.log.append(
-            {"purpose": purpose, "prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens, "seconds": round(elapsed, 2)}
+            {"purpose": purpose, "prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens,
+             "cost": round(cost, 6), "seconds": round(elapsed, 2)}
         )
         return text
 
@@ -188,23 +207,48 @@ def parse_json_response(text: str, schema: type[T]) -> T:
 
 
 def openai_transport(
-    model: str, *, temperature: float = 0.4, max_tokens: int = 4096, timeout_s: float = 180.0, no_think: bool = False
+    model: str,
+    *,
+    temperature: float = 0.4,
+    max_tokens: int = 4096,
+    timeout_s: float = 180.0,
+    no_think: bool = False,
+    retries: int = 2,
+    retry_wait_s: float = 2.0,
 ) -> Transport:
-    """Transport over the `openai` SDK (reads OPENAI_API_KEY / OPENAI_BASE_URL itself)."""
-    from openai import OpenAI
+    """Transport over the `openai` SDK (reads OPENAI_API_KEY / OPENAI_BASE_URL itself).
 
-    client = OpenAI(timeout=timeout_s, max_retries=2)
+    The SDK's own retries are off: it would also retry a 429 "Budget has been
+    exceeded". Network errors, timeouts, 5xx and other 429s get `retries` more tries.
+    """
+    from openai import APIConnectionError, InternalServerError, OpenAI, RateLimitError
 
-    def transport(messages: list[dict]) -> tuple[str, int, int]:
+    client = OpenAI(timeout=timeout_s, max_retries=0)
+
+    def create(messages: list[dict]):
+        for attempt in range(retries + 1):
+            try:
+                return client.chat.completions.create(
+                    model=model, messages=messages, temperature=temperature, max_tokens=max_tokens
+                )
+            except (APIConnectionError, InternalServerError, RateLimitError) as exc:
+                if attempt >= retries or is_budget_exceeded(exc):
+                    raise
+                time.sleep(retry_wait_s * 2**attempt)
+
+    def transport(messages: list[dict]) -> tuple[str, int, int, float]:
         if no_think:
             messages = [dict(m) for m in messages]
             messages[-1]["content"] = messages[-1]["content"] + "\n/no_think"
-        response = client.chat.completions.create(
-            model=model, messages=messages, temperature=temperature, max_tokens=max_tokens
-        )
+        response = create(messages)
         text = response.choices[0].message.content or ""
         usage = response.usage
-        return text, int(getattr(usage, "prompt_tokens", 0) or 0), int(getattr(usage, "completion_tokens", 0) or 0)
+        return (
+            text,
+            int(getattr(usage, "prompt_tokens", 0) or 0),
+            int(getattr(usage, "completion_tokens", 0) or 0),
+            float(getattr(usage, "cost", 0.0) or 0.0),
+        )
 
     return transport
 
