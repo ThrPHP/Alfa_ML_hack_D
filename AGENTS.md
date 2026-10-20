@@ -7,8 +7,9 @@ Claude Code читает `CLAUDE.md`; правила там те же.
 ## Прочитать перед работой (по порядку, не дольше пары минут)
 1. `project_context/repo_map.md` — что где лежит, кто владелец, что можно трогать.
 2. `project_context/pitfalls.md` — где раньше терялись время, деньги и контекст.
-3. `project_context/status.md` и `next_steps.md` — где мы сейчас и что дальше.
-4. По задаче: `docs/AGENT_CONTRACT.md` (агент), `docs/CONTRACTS.md` (ml_core), `project_context/case.md` (кейс).
+3. `project_context/insights.md` — главные находки: что работает, особенности прокси Qwen, во что обходится LLM.
+4. `project_context/status.md` и `next_steps.md` — где мы сейчас и что дальше.
+5. По задаче: `docs/AGENT_CONTRACT.md` (агент), `docs/CONTRACTS.md` (ml_core), `project_context/case.md` (кейс).
    PDF кейса не читать — выжимка в `case.md`.
 
 ## Правила

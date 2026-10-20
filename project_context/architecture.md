@@ -17,12 +17,12 @@ hist_gradient_boosting, catboost, lightgbm, xgboost), `feature_steps` (доба�
 | модуль | что делает |
 |---|---|
 | `research.py` | главный цикл и точка входа `run_research(task_md, deadline_ts, executor, llm, ...)`, отчёт |
-| `llm.py` | клиент OpenAI-совместимого API, JSON + pydantic, один раунд «починки», бюджет вызовов/токенов, отключение при сбоях |
+| `llm.py` | клиент OpenAI-совместимого API: поток, ограничение рассуждения, JSON + pydantic, один раунд «починки» (без рассуждения, если ответ пуст), бюджет вызовов/токенов, учёт ₽, отключение при сбоях и `Budget has been exceeded` |
 | `schemas.py` | что LLM должна вернуть: `TaskUnderstanding`, `HypothesisBatch`, `Hypothesis` |
 | `prompts.py` | промпты (англ.), списки моделей/полей берутся из ml_core |
 | `context.py` | компактные сводки данных и истории экспериментов для промпта |
 | `understand.py` | метрика (текст task.md важнее LLM), выбор валидации (time_split только при строго более позднем периоде) |
-| `hypotheses.py` | гипотеза → строгий `ExperimentConfig` (чистка/ограничение параметров, стабильный id), seeds, playbook, local search |
+| `hypotheses.py` | гипотеза → строгий `ExperimentConfig` (чистка/ограничение параметров, выброс параметров, которых модель не принимает, стабильный id), seeds, playbook, local search |
 | `features.py` + `_feature_sandbox_runner.py` | песочница для кода `make_features(df)` от LLM |
 | `executor.py` + `_worker.py` | `SubprocessExecutor` (по умолчанию, жёсткий таймаут) и `InProcessExecutor` |
 | `task_files.py` | поиск csv-файлов задачи |

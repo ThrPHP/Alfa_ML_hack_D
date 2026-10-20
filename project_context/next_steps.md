@@ -1,7 +1,8 @@
 # Дальше по порядку
 
-Сделано в сессии 2: связь с Qwen, `Budget has been exceeded`, прогоны с LLM на обеих задачах (см. status.md),
-карта репозитория, `AGENTS.md`, презентация, план передачи (`handoff.md`, согласован), `CLEANUP_BEFORE_MAIN.md`.
+Сделано в сессии 2: связь с Qwen, `Budget has been exceeded`, прогоны с LLM на обеих задачах, приёмка и тег
+`agent-v1` (`acceptance.md`), хайлайты (`insights.md`), карта репозитория, `AGENTS.md`, презентация, план передачи
+(`handoff.md`, согласован), `CLEANUP_BEFORE_MAIN.md`.
 
 1. **Seed CatBoost для большого мультикласса** — дешевле (меньше итераций) или после первых LLM-раундов: сейчас
    ~8 мин на 4 CPU и он слабее LightGBM на обеих задачах.
