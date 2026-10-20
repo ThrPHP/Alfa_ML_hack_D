@@ -102,6 +102,9 @@ Each hypothesis is a CHANGE applied to the current best config (base "best") or 
 }}
 Threads, seeds, verbosity and GPU options are set by the harness - do not set them. Iteration counts above 4000
 are clamped. Keep the time budget in mind: the history shows how long each run took.
+Harness facts: classifiers already use balanced class weights (class_weight "balanced", CatBoost
+auto_class_weights "Balanced"; set them to null to turn off), so LightGBM is_unbalance changes nothing.
+XGBoost overfits on categorical columns unless max_cat_threshold is set (e.g. 32).
 
 Strategy: prefer one clear change per hypothesis so the effect is attributable; mix cheap parameter tweaks with
 feature ideas; do not repeat configurations already in the history; learn from failures (their errors are shown);

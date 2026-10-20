@@ -28,8 +28,9 @@ from pydantic import BaseModel, ValidationError
 
 T = TypeVar("T", bound=BaseModel)
 
-# transport(messages) -> (text, prompt_tokens, completion_tokens[, cost])
-# cost is what the proxy reports in usage.cost (0.0 when it reports nothing)
+# transport(messages[, think=False]) -> (text, prompt_tokens, completion_tokens[, cost])
+# think=False asks for an answer without reasoning; cost is what the proxy reports
+# in usage.cost (0.0 when it reports nothing)
 Transport = Callable[[list[dict]], tuple]
 
 
@@ -105,6 +106,7 @@ class LLMClient:
                 temperature=float(os.environ.get("AGENT_LLM_TEMPERATURE", "0.4")),
                 max_tokens=_env_int("AGENT_LLM_MAX_OUTPUT_TOKENS", 6144),
                 timeout_s=float(os.environ.get("AGENT_LLM_TIMEOUT_S", "180")),
+                reasoning_tokens=_env_int("AGENT_LLM_REASONING_TOKENS", 3000),
                 no_think=os.environ.get("AGENT_LLM_NO_THINK", "").strip() in ("1", "true", "yes"),
             ),
             model=model,
@@ -126,11 +128,12 @@ class LLMClient:
         if self.disabled_reason:
             raise LLMUnavailable(self.disabled_reason)
 
-    def _call(self, messages: list[dict], purpose: str) -> str:
+    def _call(self, messages: list[dict], purpose: str, think: bool = True) -> str:
         self._check_budget()
         start = time.monotonic()
         try:
-            text, prompt_tokens, completion_tokens, *rest = self._transport(messages)
+            answer = self._transport(messages) if think else self._transport(messages, think=False)
+            text, prompt_tokens, completion_tokens, *rest = answer
         except Exception as exc:
             self.usage.failed_calls += 1
             if is_budget_exceeded(exc):
@@ -158,16 +161,18 @@ class LLMClient:
         """Ask for a JSON object matching `schema`. Raises LLMUnavailable or LLMBadResponse."""
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
         last_error = ""
+        think = True
         for attempt in range(repair_rounds + 1):
-            text = self._call(messages, purpose or schema.__name__)
+            text = self._call(messages, purpose or schema.__name__, think)
             try:
                 return parse_json_response(text, schema)
             except LLMBadResponse as exc:
                 last_error = str(exc)
                 if not _THINK_RE.sub("", text).strip():
-                    # Qwen spent the whole max_tokens on reasoning and wrote no answer
+                    # Qwen spent the whole max_tokens on reasoning and wrote no answer: retry without reasoning
+                    think = False
                     repair = ("You ran out of output tokens while thinking and gave no answer. Answer right away "
-                              "with ONE compact JSON object only, matching the requested format.\n/no_think")
+                              "with ONE compact JSON object only, matching the requested format.")
                 else:
                     repair = ("Your answer could not be used: " + last_error[:1500]
                               + "\nReply again with ONE valid JSON object only, matching the requested format.")
@@ -214,6 +219,7 @@ def openai_transport(
     temperature: float = 0.4,
     max_tokens: int = 6144,
     timeout_s: float = 180.0,
+    reasoning_tokens: int = 3000,
     no_think: bool = False,
     retries: int = 1,
     retry_wait_s: float = 2.0,
@@ -225,15 +231,19 @@ def openai_transport(
     The SDK's own retries are off: it would also retry a 429 "Budget has been
     exceeded". Network errors, timeouts, 5xx and other 429s get `retries` more tries
     (few: a failed attempt is still billed for what the model generated).
+
+    Reasoning is capped at `reasoning_tokens` (0 = no cap) so that max_tokens always
+    leaves room for the answer; think=False / no_think turn it off. Both use the
+    proxy's OpenRouter-style `reasoning` field (Qwen ignores "/no_think" too often).
     """
     from openai import APIConnectionError, InternalServerError, OpenAI, RateLimitError
 
     client = OpenAI(timeout=timeout_s, max_retries=0)
 
-    def stream_once(messages: list[dict]) -> tuple[str, object]:
+    def stream_once(messages: list[dict], extra_body: dict | None) -> tuple[str, object]:
         stream = client.chat.completions.create(
             model=model, messages=messages, temperature=temperature, max_tokens=max_tokens,
-            stream=True, stream_options={"include_usage": True},
+            stream=True, stream_options={"include_usage": True}, extra_body=extra_body,
         )
         parts, usage = [], None
         for chunk in stream:
@@ -243,21 +253,22 @@ def openai_transport(
                 parts.append(chunk.choices[0].delta.content)
         return "".join(parts), usage
 
-    def create(messages: list[dict]) -> tuple[str, object]:
+    def create(messages: list[dict], extra_body: dict | None) -> tuple[str, object]:
         for attempt in range(retries + 1):
             try:
-                return stream_once(messages)
+                return stream_once(messages, extra_body)
             except (APIConnectionError, InternalServerError, RateLimitError) as exc:
                 if attempt >= retries or is_budget_exceeded(exc):
                     raise
                 time.sleep(retry_wait_s * 2**attempt)
         raise AssertionError("unreachable")
 
-    def transport(messages: list[dict]) -> tuple[str, int, int, float]:
-        if no_think:
-            messages = [dict(m) for m in messages]
-            messages[-1]["content"] = messages[-1]["content"] + "\n/no_think"
-        text, usage = create(messages)
+    def transport(messages: list[dict], think: bool = True) -> tuple[str, int, int, float]:
+        if no_think or not think:
+            extra_body = {"reasoning": {"effort": "none"}}
+        else:
+            extra_body = {"reasoning": {"max_tokens": reasoning_tokens}} if reasoning_tokens > 0 else None
+        text, usage = create(messages, extra_body)
         if usage is None:  # proxy sent no usage chunk: rough estimate, no cost
             return text, sum(len(m["content"]) for m in messages) // 4, len(text) // 4, 0.0
         return (

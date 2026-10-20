@@ -113,6 +113,10 @@ def test_openai_transport_streams_and_does_not_retry_a_spent_budget(monkeypatch)
     usage = SimpleNamespace(prompt_tokens=10, completion_tokens=3, cost=0.5)
     _FakeOpenAI.calls, _FakeOpenAI.script = [], [[_chunk('{"a"'), _chunk(None), _chunk(": 1}"), _chunk(usage=usage)]]
     assert transport(messages) == ('{"a": 1}', 10, 3, 0.5)
+    assert _FakeOpenAI.calls[-1]["extra_body"] == {"reasoning": {"max_tokens": 3000}}
+    _FakeOpenAI.script = [[_chunk("{}")]]
+    transport(messages, think=False)
+    assert _FakeOpenAI.calls[-1]["extra_body"] == {"reasoning": {"effort": "none"}}
 
     _FakeOpenAI.calls, _FakeOpenAI.script = [], [openai.RateLimitError("Budget has been exceeded", response=response, body=None)]
     with pytest.raises(openai.RateLimitError):
@@ -134,10 +138,11 @@ def test_usage_counts_the_cost_reported_by_the_proxy():
 def test_an_answer_cut_off_while_reasoning_is_retried_without_thinking():
     seen = []
 
-    def transport(messages):
-        seen.append(messages)
+    def transport(messages, think=True):
+        seen.append((messages, think))
         return ("" if len(seen) == 1 else '{"metric_name": "rmse"}'), 100, 6144
 
     client = LLMClient(transport)
     assert client.complete_json("s", "u", TaskUnderstanding).metric_name == "rmse"
-    assert seen[1][-1]["content"].endswith("/no_think") and "ran out of output tokens" in seen[1][-1]["content"]
+    assert [think for _, think in seen] == [True, False]
+    assert "ran out of output tokens" in seen[1][0][-1]["content"]
