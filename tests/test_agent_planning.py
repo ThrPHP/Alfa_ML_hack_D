@@ -124,3 +124,16 @@ def test_local_search_moves_stay_in_bounds_and_build_valid_configs():
         assert cfg.model_name == "catboost"
         assert cfg.hyperparameters["iterations"] <= 3000 and 3 <= cfg.hyperparameters["depth"] <= 10
     assert local_search_hypotheses(ExperimentConfig(model_name="ridge", validation_id="v"), 3, random.Random(0)) == []
+
+
+def test_materialize_drops_parameters_the_model_does_not_take():
+    # both seen from Qwen on the regression task: classifier-only weights and LightGBM params on CatBoost
+    hyp = Hypothesis(title="t", model_name="catboost",
+                     hyperparameters={"depth": 6, "auto_class_weights": "Balanced", "colsample_bytree": 0.7, "subsample_freq": 1})
+    config, notes = materialize(hyp, None, "v", task_type="regression")
+    assert config.hyperparameters == {"depth": 6, "allow_writing_files": False}
+    assert sum("dropped" in n for n in notes) == 3
+
+    config, _ = materialize(Hypothesis(title="t", model_name="catboost", hyperparameters={"auto_class_weights": None}),
+                            None, "v", task_type="classification")
+    assert "auto_class_weights" in config.hyperparameters  # valid for a classifier: kept

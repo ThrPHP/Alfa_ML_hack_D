@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import math
 import random
+import re
 from typing import Any
 
 from pydantic import ValidationError
@@ -67,6 +68,31 @@ def sanitize_hyperparameters(model_name: str, hyperparameters: dict[str, Any]) -
     return out, notes
 
 
+_UNEXPECTED_KW = re.compile(r"unexpected keyword argument '([^']+)'")
+
+
+def drop_unknown_hyperparameters(model_name: str, task_type: str, hyperparameters: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Drop keys the estimator's constructor rejects (e.g. LightGBM params on CatBoost, class weights on a regressor).
+
+    Builds the estimator without fitting it; CatBoost and sklearn models reject unknown keywords with a
+    TypeError, which would otherwise fail the whole experiment. LightGBM/XGBoost accept anything.
+    """
+    hyper, notes = dict(hyperparameters), []
+    for _ in range(len(hyper) + 1):
+        try:
+            model_registry.build_model(model_name, task_type, hyper, random_seed=0, n_jobs=1)
+            break
+        except TypeError as exc:
+            match = _UNEXPECTED_KW.search(str(exc))
+            if not match or match.group(1) not in hyper:
+                break
+            hyper.pop(match.group(1))
+            notes.append(f"dropped {match.group(1)!r}: not a {model_name} parameter for {task_type}")
+        except Exception:
+            break  # other construction problems surface in the experiment itself, with their error text
+    return hyper, notes
+
+
 def stable_experiment_id(config: ExperimentConfig) -> str:
     return config_hash(config.model_dump(mode="json", exclude={"experiment_id", "time_budget_s", "n_jobs"}))
 
@@ -79,6 +105,7 @@ def materialize(
     n_jobs: int | None = -1,
     seed: int = 42,
     extra_feature_steps: list[str] | None = None,
+    task_type: str | None = None,
 ) -> tuple[ExperimentConfig, list[str]]:
     """Build the ExperimentConfig for a hypothesis. Raises HypothesisError with a readable reason."""
     start = best if (hypothesis.base == "best" and best is not None) else None
@@ -91,6 +118,9 @@ def materialize(
     same_model = start is not None and start.model_name == model_name
     hyper = {**(start.hyperparameters if same_model else {}), **hypothesis.hyperparameters}
     hyper, notes = sanitize_hyperparameters(model_name, hyper)
+    if task_type:
+        hyper, dropped = drop_unknown_hyperparameters(model_name, task_type, hyper)
+        notes += dropped
 
     pre: dict[str, Any] = start.preprocessing.model_dump() if start else {}
     if not same_model:

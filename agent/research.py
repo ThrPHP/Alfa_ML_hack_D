@@ -413,6 +413,7 @@ class _Researcher:
             config, notes = materialize(
                 hyp, best_cfg, self.ctx.validation_plan.validation_id,
                 n_jobs=self.settings.n_jobs, seed=self.settings.seed, extra_feature_steps=extra_steps,
+                task_type=self.task_spec.task_type if self.task_spec else None,
             )
             resolved = self._resolve_generated_steps(config.feature_steps)
             if resolved != config.feature_steps:

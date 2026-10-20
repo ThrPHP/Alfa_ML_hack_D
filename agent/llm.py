@@ -236,6 +236,7 @@ def openai_transport(
     leaves room for the answer; think=False / no_think turn it off. Both use the
     proxy's OpenRouter-style `reasoning` field (Qwen ignores "/no_think" too often).
     """
+    import httpx
     from openai import APIConnectionError, InternalServerError, OpenAI, RateLimitError
 
     client = OpenAI(timeout=timeout_s, max_retries=0)
@@ -257,7 +258,8 @@ def openai_transport(
         for attempt in range(retries + 1):
             try:
                 return stream_once(messages, extra_body)
-            except (APIConnectionError, InternalServerError, RateLimitError) as exc:
+            # httpx.TransportError: the stream broke mid-answer (e.g. RemoteProtocolError, seen on the proxy)
+            except (APIConnectionError, InternalServerError, RateLimitError, httpx.TransportError) as exc:
                 if attempt >= retries or is_budget_exceeded(exc):
                     raise
                 time.sleep(retry_wait_s * 2**attempt)

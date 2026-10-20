@@ -123,6 +123,10 @@ def test_openai_transport_streams_and_does_not_retry_a_spent_budget(monkeypatch)
         transport(messages)
     assert len(_FakeOpenAI.calls) == 1
 
+    _FakeOpenAI.calls, _FakeOpenAI.script = [], [httpx.RemoteProtocolError("peer closed connection"), [_chunk("{}")]]
+    assert transport(messages)[0] == "{}"  # a stream broken mid-answer is retried
+    assert len(_FakeOpenAI.calls) == 2
+
     busy = openai.RateLimitError("Too many requests", response=response, body=None)
     _FakeOpenAI.calls, _FakeOpenAI.script = [], [busy, busy, [_chunk("{}")]]
     assert transport(messages)[0] == "{}"  # an ordinary 429 is retried; no usage chunk -> estimate
