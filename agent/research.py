@@ -68,6 +68,8 @@ class ResearchSettings:
     max_rounds: int = 60
     hypotheses_per_round: int = 3
     patience_rounds: int = 4  # LLM rounds in a row without a new best before the LLM phase ends
+    llm_rest_rounds: int = 6  # playbook/local-search rounds before the LLM gets another turn
+    return_patience_rounds: int = 2  # patience on such a return visit
     max_bad_llm_answers: int = 3
     n_jobs: int | None = -1
     seed: int = 42
@@ -82,6 +84,7 @@ class ResearchSettings:
         s = cls()
         s.max_rounds = int(_env_float("AGENT_MAX_ROUNDS", s.max_rounds))
         s.patience_rounds = int(_env_float("AGENT_PATIENCE", s.patience_rounds))
+        s.llm_rest_rounds = int(_env_float("AGENT_LLM_REST_ROUNDS", s.llm_rest_rounds))
         s.max_experiment_s = _env_float("AGENT_MAX_EXPERIMENT_S", s.max_experiment_s)
         n_jobs = os.environ.get("AGENT_N_JOBS")
         if n_jobs:
@@ -255,6 +258,15 @@ class _Researcher:
         # refit time ~ one CV fold scaled by self.refit_ratio, which is re-measured after every real refit
         per_fold = result.duration_s / max(1, result.n_folds_completed)
         return per_fold * self.refit_ratio + 15.0
+
+    def _llm_round_fits(self) -> bool:
+        """Is there time for an LLM answer plus one experiment like the current best? Else the call is wasted."""
+        if self.best is None or self.llm is None:
+            return True
+        u = self.llm.usage
+        llm_s = u.seconds / u.calls if u.calls else 30.0
+        needed = self._estimate_run_s(self.best.config.model_name, self.best.config.hyperparameters) * 1.1 + llm_s
+        return self.remaining() - self._reserve_s() >= needed
 
     def _reserve_s(self) -> float:
         refit = self._estimate_refit_s(self.best) * self.settings.refit_safety if self.best else 0.0
@@ -503,20 +515,32 @@ class _Researcher:
 
         playbook = deque(playbook_hypotheses(self.task_spec, self.profile, self.drop_candidates))
         llm_phase = self.llm is not None
-        stale = 0
+        stale, patience, rest = 0, self.settings.patience_rounds, 0
+        n_at_leave = 0
+
+        def leave_llm(reason: str) -> None:
+            nonlocal llm_phase, rest, n_at_leave
+            self.log(reason)
+            llm_phase, rest, n_at_leave = False, self.settings.llm_rest_rounds, len(self.results)
+
         for round_no in range(1, self.settings.max_rounds + 1):
             if self.out_of_time or self.remaining() - self._reserve_s() < 60:
                 self.log("time budget for experiments is used up")
                 break
+            if not llm_phase and self.llm is not None and rest <= 0 and len(self.results) > n_at_leave:
+                self.log(f"back to the LLM: {len(self.results) - n_at_leave} new experiments since it last proposed")
+                llm_phase, stale, patience = True, 0, self.settings.return_patience_rounds
             source = "playbook"
             hyps: list[Hypothesis] = []
+            if llm_phase and self.llm is not None and not self._llm_round_fits():
+                self.log("not enough time left for an LLM round plus an experiment; no more LLM calls")
+                llm_phase, rest = False, self.settings.max_rounds
             if llm_phase and self.llm is not None:
                 try:
                     hyps, stop = self._llm_hypotheses(round_no)
                     source = "llm"
                     if stop or not hyps:
-                        self.log("LLM decided to stop researching" if stop else "LLM proposed nothing")
-                        llm_phase = False
+                        leave_llm("LLM decided to stop researching" if stop else "LLM proposed nothing")
                 except (LLMUnavailable, LLMBadResponse) as exc:
                     self._llm_problem(exc, f"round {round_no}")
                     if self.llm is None:
@@ -536,16 +560,19 @@ class _Researcher:
                 break
 
             self.report.rounds = round_no
-            improved = False
+            improved = ran = False
             for hyp in hyps:
-                improved |= self.run_hypothesis(hyp, source, round_no).new_best
+                entry = self.run_hypothesis(hyp, source, round_no)
+                improved |= entry.new_best
+                ran |= entry.status != "skipped"  # skipped for lack of time says nothing about the ideas
                 if self.out_of_time:
                     break
-            if source == "llm":
+            if source == "llm" and ran:
                 stale = 0 if improved else stale + 1
-                if stale >= self.settings.patience_rounds:
-                    self.log(f"{stale} LLM rounds without a new best; switching to the generic playbook")
-                    llm_phase = False
+                if stale >= patience:
+                    leave_llm(f"{stale} LLM rounds without a new best; switching to the generic playbook")
+            elif source != "llm":
+                rest -= 1
             if self.best and time.time() - self.last_refit_ts > self.settings.checkpoint_every_s:
                 self.refit_best("checkpoint")
 

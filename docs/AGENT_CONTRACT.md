@@ -81,6 +81,7 @@ Each CV run is capped at `min(time left − reserve, AGENT_MAX_EXPERIMENT_S=1800
 | `AGENT_LLM_NO_THINK` | off | `1` turns reasoning off (`reasoning.effort=none`): ~3x cheaper, weaker answers |
 | `AGENT_TIME_BUDGET_S` | 9900 | used only when `deadline_ts` is not passed |
 | `AGENT_MAX_ROUNDS` / `AGENT_PATIENCE` | 60 / 4 | research rounds / LLM rounds without a new best before switching to the playbook |
+| `AGENT_LLM_REST_ROUNDS` | 6 | playbook/local-search rounds before the LLM gets another turn (patience 2 on return); no LLM round is started when an answer plus one experiment like the best no longer fits in the time left |
 | `AGENT_MAX_EXPERIMENT_S` | 1800 | hard cap for one CV run |
 | `AGENT_N_JOBS` | -1 | threads per model fit |
 | `AGENT_FEATURE_CODE` | on | `0` disables LLM-written feature code |

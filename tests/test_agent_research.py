@@ -87,3 +87,17 @@ def test_research_survives_a_broken_llm_and_a_tight_deadline(regression_dataset,
     report = run_research(task_md, time.time() - 1, llm=None, work_dir=tmp_path / "w2", out_path=tmp_path / "late.csv")
     assert report.submitted_experiment_id == "fallback"
     assert len(pd.read_csv(tmp_path / "late.csv")) == len(pd.read_csv(regression_dataset["test"]))
+
+
+def test_llm_gets_another_turn_after_the_playbook(regression_dataset, tmp_path):
+    task_md = _task_md(regression_dataset, "RMSE")
+    stop = json.dumps({"analysis": "nothing to add", "hypotheses": [], "stop": True})
+    llm = LLMClient(scripted_transport([json.dumps({"metric_name": "rmse"}), stop, stop]), model="scripted")
+    settings = _settings()
+    settings.max_rounds, settings.llm_rest_rounds = 2, 1  # round 1: LLM stops -> playbook; round 2: LLM again
+    logs: list[str] = []
+    report = run_research(task_md, time.time() + 300, llm=llm, work_dir=tmp_path / "work", settings=settings, log=logs.append)
+
+    assert report.status == "ok", report.error
+    assert report.llm_usage["calls"] == 3
+    assert any("back to the LLM" in line for line in logs)
