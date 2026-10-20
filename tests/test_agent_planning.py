@@ -109,3 +109,18 @@ def test_feature_code_static_and_dynamic_checks(tmp_path):
     assert any("rows" in p for p in sandbox.check(shrink).problems)
     const = "def make_features(df):\n    df['c'] = 1\n    return df\n"
     assert any("constant" in p for p in sandbox.check(const).problems)
+
+
+def test_local_search_moves_stay_in_bounds_and_build_valid_configs():
+    import random
+
+    from agent.hypotheses import local_search_hypotheses
+
+    best = ExperimentConfig(model_name="catboost", hyperparameters={"iterations": 2900, "depth": 10}, validation_id="v")
+    hyps = local_search_hypotheses(best, 20, random.Random(1))
+    assert hyps
+    for h in hyps:
+        cfg, _ = materialize(h, best, "v")
+        assert cfg.model_name == "catboost"
+        assert cfg.hyperparameters["iterations"] <= 3000 and 3 <= cfg.hyperparameters["depth"] <= 10
+    assert local_search_hypotheses(ExperimentConfig(model_name="ridge", validation_id="v"), 3, random.Random(0)) == []

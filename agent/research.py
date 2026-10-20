@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import time
 import traceback
 from collections import deque
@@ -31,13 +32,21 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from ml_core import experiment_log, prediction, profiling, validation
-from ml_core.contracts import ExperimentResult, TaskSpec
+from ml_core import prediction, profiling, validation
+from ml_core.contracts import ExperimentResult, PreprocessingConfig, TaskSpec
+from ml_core.preprocessing import split_feature_columns
 
 from agent import context, prompts
 from agent.executor import ExperimentContext, Executor, SubprocessExecutor
 from agent.features import FeatureSandbox
-from agent.hypotheses import HypothesisError, materialize, playbook_hypotheses, seed_hypotheses
+from agent.hypotheses import (
+    HypothesisError,
+    local_search_hypotheses,
+    materialize,
+    playbook_hypotheses,
+    seed_hypotheses,
+    stable_experiment_id,
+)
 from agent.llm import LLMBadResponse, LLMClient, LLMUnavailable
 from agent.schemas import Hypothesis, HypothesisBatch, TaskUnderstanding
 from agent.task_files import TaskFiles, locate_task_files, read_task_text
@@ -56,7 +65,7 @@ def _env_float(name: str, default: float) -> float:
 
 @dataclass
 class ResearchSettings:
-    max_rounds: int = 30
+    max_rounds: int = 60
     hypotheses_per_round: int = 3
     patience_rounds: int = 4  # LLM rounds in a row without a new best before the LLM phase ends
     max_bad_llm_answers: int = 3
@@ -193,6 +202,8 @@ class _Researcher:
         self.last_refit_ts = 0.0
         self.refit_ratio = 1.4
         self.sandbox: FeatureSandbox | None = None
+        self.accepted_py_steps: set[str] = set()
+        self.rng = random.Random(settings.seed)
         self.ctx: ExperimentContext | None = None
         self.task_spec: TaskSpec | None = None
         self.out_of_time = False
@@ -308,7 +319,7 @@ class _Researcher:
             "strategy": plan.strategy, "n_splits": plan.n_splits, "time_column": plan.time_column,
             "group_column": plan.group_column, "validation_id": plan.validation_id, "reason": vd.reason,
         }
-        self.validation_brief = context.describe_validation(plan)
+        self.validation_brief = context.describe_metric(spec) + "\n" + context.describe_validation(plan)
         self.drop_candidates = drop_candidates(profile, vd, understanding)
         self.understanding_summary = understanding.summary if understanding else ""
         self.profile = profile
@@ -349,10 +360,23 @@ class _Researcher:
 
     def _sandbox(self) -> FeatureSandbox:
         if self.sandbox is None:
-            assert self.task_spec is not None
-            drop = list(self.task_spec.id_columns) + [self.task_spec.target_column]
-            self.sandbox = FeatureSandbox.from_csv(self.work_dir / "features", self.files.train, self.files.test, drop)
+            cols = split_feature_columns(self.profile.columns, PreprocessingConfig())
+            keep = cols.numeric + cols.categorical  # what ml_core hands to feature steps (no id/target/constants)
+            self.sandbox = FeatureSandbox.from_csv(self.work_dir / "features", self.files.train, self.files.test, keep)
         return self.sandbox
+
+    def _resolve_generated_steps(self, steps: list[str]) -> list[str]:
+        """py: steps may only point at code this run's sandbox accepted; short names from the history map back."""
+        accepted = {Path(p[3:]).name: p for p in self.accepted_py_steps}
+        out = []
+        for step in steps:
+            if step.startswith("py:"):
+                full = step if step in self.accepted_py_steps else accepted.get(Path(step[3:]).name)
+                if full is None:
+                    raise HypothesisError(f"unknown generated step {step!r}: submit new code via feature_code")
+                step = full
+            out.append(step)
+        return out
 
     def run_hypothesis(self, hyp: Hypothesis, source: str, round_no: int) -> JournalEntry:
         assert self.ctx is not None
@@ -368,6 +392,7 @@ class _Researcher:
                 self.notes.append(f"«{entry.title}»: {check.summary()[:400]}")
                 return self._journal(entry)
             extra_steps.append(check.step or "")
+            self.accepted_py_steps.add(check.step or "")
             entry.note = check.summary()
 
         best_cfg = self.best.config if self.best else None
@@ -376,6 +401,10 @@ class _Researcher:
                 hyp, best_cfg, self.ctx.validation_plan.validation_id,
                 n_jobs=self.settings.n_jobs, seed=self.settings.seed, extra_feature_steps=extra_steps,
             )
+            resolved = self._resolve_generated_steps(config.feature_steps)
+            if resolved != config.feature_steps:
+                config = config.model_copy(update={"feature_steps": resolved})
+                config = config.model_copy(update={"experiment_id": stable_experiment_id(config)})
         except HypothesisError as exc:
             entry.status, entry.note = "invalid", str(exc)[:400]
             self.notes.append(f"«{entry.title}» invalid: {str(exc)[:300]}")
@@ -497,6 +526,11 @@ class _Researcher:
                 source = "playbook"
                 hyps = [playbook.popleft() for _ in range(min(self.settings.hypotheses_per_round, len(playbook)))]
             if not hyps:
+                source = "local-search"
+                hyps = local_search_hypotheses(
+                    self.best.config if self.best else None, self.settings.hypotheses_per_round, self.rng
+                )
+            if not hyps:
                 self.log("no more hypotheses to try")
                 break
 
@@ -516,11 +550,8 @@ class _Researcher:
 
     # ------------------------------------------------------------- phase 4
     def finish(self) -> None:
-        if self.ctx is not None:
-            logged = experiment_log.select_best(self.ctx.experiments_dir, validation_id=self.ctx.validation_plan.validation_id)
-            if logged is not None and self.best is not None and logged.experiment_id != self.best.experiment_id:
-                self.notes.append(f"experiment log best {logged.experiment_id} differs from tracked best; using the log")
-                self.best = logged
+        # self.best is tracked over this run's results only: the ledger in a reused work_dir may also
+        # hold results of earlier runs (same validation_id), which this run never verified.
         self.refit_best("final")
         r = self.report
         if self.best is not None:

@@ -11,6 +11,8 @@ the same idea proposed twice maps to the same id and is skipped.
 
 from __future__ import annotations
 
+import math
+import random
 from typing import Any
 
 from pydantic import ValidationError
@@ -204,3 +206,61 @@ def playbook_hypotheses(task_spec: TaskSpec, profile: DataProfile, drop_candidat
         for col in drop_candidates
     ]
     return ideas
+
+
+# (param, library default used when the base config does not set it, kind, low, high)
+_SEARCH_SPACE: dict[str, list[tuple[str, float, str, float, float]]] = {
+    "lightgbm": [
+        ("learning_rate", 0.1, "log", 0.01, 0.3), ("n_estimators", 100, "int_log", 100, 3000),
+        ("num_leaves", 31, "int_log", 8, 512), ("min_child_samples", 20, "int_log", 5, 500),
+        ("colsample_bytree", 1.0, "lin", 0.3, 1.0), ("subsample", 1.0, "lin", 0.5, 1.0),
+        ("reg_lambda", 0.0, "lin", 0.0, 20.0),
+    ],
+    "catboost": [
+        ("learning_rate", 0.08, "log", 0.01, 0.3), ("iterations", 1000, "int_log", 100, 3000),
+        ("depth", 6, "int", 3, 10), ("l2_leaf_reg", 3.0, "log", 0.5, 30.0),
+    ],
+    "xgboost": [
+        ("learning_rate", 0.3, "log", 0.01, 0.3), ("n_estimators", 100, "int_log", 100, 3000),
+        ("max_depth", 6, "int", 3, 12), ("min_child_weight", 1.0, "log", 0.5, 50.0),
+        ("colsample_bytree", 1.0, "lin", 0.3, 1.0), ("subsample", 1.0, "lin", 0.5, 1.0),
+        ("reg_lambda", 1.0, "log", 0.1, 30.0),
+    ],
+    "hist_gradient_boosting": [
+        ("learning_rate", 0.1, "log", 0.01, 0.3), ("max_iter", 100, "int_log", 100, 2000),
+        ("max_leaf_nodes", 31, "int_log", 8, 256), ("min_samples_leaf", 20, "int_log", 5, 500),
+        ("l2_regularization", 0.0, "lin", 0.0, 10.0),
+    ],
+}
+
+
+def _perturb(value: float, kind: str, lo: float, hi: float, rng) -> float:
+    if kind in ("log", "int_log"):
+        new = math.exp(math.log(max(value, 1e-9)) + rng.choice([-1, 1]) * rng.uniform(0.2, 0.6))
+    elif kind == "int":
+        new = value + rng.choice([-1, 1]) * rng.randint(1, 2)
+    else:
+        new = value + rng.choice([-1, 1]) * rng.uniform(0.1, 0.3) * (hi - lo)
+    new = min(max(new, lo), hi)
+    return int(round(new)) if kind in ("int", "int_log") else round(new, 4)
+
+
+def local_search_hypotheses(best: ExperimentConfig | None, n: int, rng: random.Random) -> list[Hypothesis]:
+    """Small random moves (1-2 hyperparameters) around the best config, for when ideas run out."""
+    if best is None or best.model_name not in _SEARCH_SPACE:
+        return []
+    space = _SEARCH_SPACE[best.model_name]
+    out = []
+    for _ in range(n):
+        changes: dict[str, float] = {}
+        for name, default, kind, lo, hi in rng.sample(space, k=min(len(space), rng.choice([1, 2]))):
+            current = best.hyperparameters.get(name, default)
+            if isinstance(current, (int, float)) and not isinstance(current, bool):
+                new = _perturb(float(current), kind, lo, hi, rng)
+                if new != current:
+                    changes[name] = new
+        if changes:
+            desc = ", ".join(f"{k} {best.hyperparameters.get(k, '·')}→{v}" for k, v in changes.items())
+            out.append(Hypothesis(title=f"tune: {desc}", kind="params", hyperparameters=changes,
+                                  rationale="local search around the best config"))
+    return out

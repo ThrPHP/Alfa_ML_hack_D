@@ -11,6 +11,19 @@ timeout enforcement.
 Full integration contract (objects, operations, what each side needs to
 provide): **[docs/CONTRACTS.md](docs/CONTRACTS.md)**.
 
+## LLM research agent (`agent/`)
+
+The second layer of the team's solution: an AutoResearch loop on top of
+`ml_core` that understands the task, proposes hypotheses (LLM or a generic
+playbook when no LLM is configured), runs them under one honest validation
+split, analyses the results and writes the best `submission.csv`. Entry point
+for infrastructure: `agent.research.run_research(task_md, deadline_ts)`;
+contract and env variables: **[docs/AGENT_CONTRACT.md](docs/AGENT_CONTRACT.md)**.
+
+```bash
+python scripts/run_agent_local.py "Base/Datasets/Регрессия/task.md" --budget-s 600 --no-llm
+```
+
 ## Install
 
 ```bash

@@ -44,6 +44,7 @@ def test_research_with_scripted_llm(classification_dataset, tmp_path):
                 {"title": "sum feature", "kind": "features", "feature_code": feature_code},
                 {"title": "hallucinated model", "model_name": "super_net"},
                 {"title": "bad code", "feature_code": "import os\ndef make_features(df):\n    return df"},
+                {"title": "sneaky step", "add_feature_steps": ["py:/etc/hostname"]},
             ],
         }),
         json.dumps({"analysis": "done", "hypotheses": [], "stop": True}),
@@ -51,6 +52,7 @@ def test_research_with_scripted_llm(classification_dataset, tmp_path):
     llm = LLMClient(scripted_transport(answers), model="scripted")
     settings = _settings()
     settings.max_rounds = 2  # round 1: LLM ideas; round 2: LLM stops -> one playbook round
+    settings.hypotheses_per_round = 4
     report = run_research(task_md, time.time() + 300, llm=llm, work_dir=tmp_path / "work", settings=settings)
 
     assert report.status == "ok", report.error
@@ -60,6 +62,7 @@ def test_research_with_scripted_llm(classification_dataset, tmp_path):
     assert statuses["sum feature"] == "success"
     assert statuses["hallucinated model"] == "invalid"
     assert statuses["bad code"] == "rejected"
+    assert statuses["sneaky step"] == "invalid"  # only sandbox-accepted code may run as a py: step
     assert report.llm_usage["calls"] == 3
     assert report.understanding == "x1+x2 drives the label"
     assert any(j["source"] == "playbook" for j in report.journal)  # after the LLM stopped

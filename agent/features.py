@@ -99,11 +99,12 @@ class FeatureSandbox:
 
     @classmethod
     def from_csv(
-        cls, work_dir: str | Path, train_csv: str | Path, test_csv: str | Path, drop_columns: list[str], timeout_s: float = 180.0
+        cls, work_dir: str | Path, train_csv: str | Path, test_csv: str | Path, feature_columns: list[str], timeout_s: float = 180.0
     ) -> "FeatureSandbox":
-        train = pd.read_csv(train_csv).drop(columns=drop_columns, errors="ignore")
-        test = pd.read_csv(test_csv).drop(columns=drop_columns, errors="ignore")
-        return cls(work_dir, train, test[[c for c in train.columns if c in test.columns]], timeout_s)
+        """feature_columns: exactly the columns ml_core passes to feature steps (never id or target)."""
+        train = pd.read_csv(train_csv, usecols=feature_columns)[feature_columns]
+        test = pd.read_csv(test_csv, usecols=feature_columns)[feature_columns]
+        return cls(work_dir, train, test, timeout_s)
 
     def check(self, code: str, title: str = "") -> FeatureCheck:
         problems = static_check(code)

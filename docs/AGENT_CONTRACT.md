@@ -79,7 +79,7 @@ Each CV run is capped at `min(time left − reserve, AGENT_MAX_EXPERIMENT_S=1800
 | `AGENT_LLM_TIMEOUT_S` | 180 | per request |
 | `AGENT_LLM_NO_THINK` | off | `1` appends `/no_think` (Qwen3 soft switch) to save tokens |
 | `AGENT_TIME_BUDGET_S` | 9900 | used only when `deadline_ts` is not passed |
-| `AGENT_MAX_ROUNDS` / `AGENT_PATIENCE` | 30 / 4 | research rounds / LLM rounds without a new best before switching to the playbook |
+| `AGENT_MAX_ROUNDS` / `AGENT_PATIENCE` | 60 / 4 | research rounds / LLM rounds without a new best before switching to the playbook |
 | `AGENT_MAX_EXPERIMENT_S` | 1800 | hard cap for one CV run |
 | `AGENT_N_JOBS` | -1 | threads per model fit |
 | `AGENT_FEATURE_CODE` | on | `0` disables LLM-written feature code |
@@ -103,7 +103,9 @@ Each CV run is capped at `min(time left − reserve, AGENT_MAX_EXPERIMENT_S=1800
    back to the LLM. After `AGENT_PATIENCE` rounds without a new best, or
    when the LLM says stop, or when the LLM is unavailable, a generic
    playbook continues (log1p target, regularized/bigger boosting, missing
-   indicators, count encoding, XGBoost, deeper CatBoost, dropping a period column).
+   indicators, count encoding, XGBoost, deeper CatBoost, dropping a period column),
+   and once that is exhausted, a local search (1–2 hyperparameters of the best
+   config perturbed per experiment) until the time or `AGENT_MAX_ROUNDS` runs out.
 6. **Final**: best by `ml_core.experiment_log.select_best` on the run's
    validation_id → refit on all train rows → `submission.csv` → report.
 

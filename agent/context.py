@@ -44,11 +44,15 @@ def load_descriptions(data_dictionary_path: str | Path) -> dict[str, str]:
     return out
 
 
-def describe_task(task_spec: TaskSpec, profile: DataProfile, descriptions: dict[str, str]) -> str:
+def describe_metric(task_spec: TaskSpec) -> str:
     direction = "higher is better" if task_spec.greater_is_better else "lower is better"
+    return f"Metric being optimized: {task_spec.metric_name} ({direction})."
+
+
+def describe_task(task_spec: TaskSpec, profile: DataProfile, descriptions: dict[str, str]) -> str:
+    """Data brief (deliberately without the metric: it is decided after the understanding step)."""
     lines = [
-        f"Task type: {task_spec.task_type}. Target: `{task_spec.target_column}`. "
-        f"Metric: {task_spec.metric_name} ({direction}).",
+        f"Task type: {task_spec.task_type}. Target: `{task_spec.target_column}`.",
         f"Rows: train={profile.n_rows_train}, test={profile.n_rows_test}. "
         f"Fully duplicated train rows: {profile.duplicated_rows_train}.",
     ]
