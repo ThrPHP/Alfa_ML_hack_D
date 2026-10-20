@@ -4,10 +4,8 @@
 (на платформе 8 CPU / 32 GB — там быстрее). LLM: `qwen/qwen3.8-27b` через прокси организаторов.
 Критерии — в [handoff.md](handoff.md).
 
-`agent-v1` = коммит `f0bdfc3` в `claude/fervent-lamport-31kwal`. Из облачной сессии тег не пушится (её git-прокси
-пропускает только пуши в рабочую ветку), поэтому ставится руками: GitHub → Releases → Draft a new release →
-тег `agent-v1`, target — этот коммит; или локально
-`git fetch origin claude/fervent-lamport-31kwal && git tag -a agent-v1 f0bdfc3 -m "agent-v1" && git push origin agent-v1`.
+`agent-v1` = коммит `1f1af57` в `claude/fervent-lamport-31kwal` — GitHub-релиз (pre-release) с тегом `agent-v1`,
+поставлен вручную: из облачной сессии теги не пушатся (её git-прокси пропускает только рабочую ветку).
 
 ## Итог по критериям
 | # | критерий | результат |
