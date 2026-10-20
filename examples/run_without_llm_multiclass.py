@@ -68,7 +68,13 @@ def main() -> None:
     assert best is not None, "no successful, fully-comparable experiment found"
     print(f"\nbest: {best.config.model_name} macro_f1={best.metric_value:.3f}")
 
+    print(
+        f"\nrefitting {best.config.model_name} on the full train set and predicting test — this prints "
+        "nothing while it runs and can take a couple of minutes for catboost, it is not stuck..."
+    )
+    t0 = time.time()
     pred_result = prediction.refit_and_predict(task_spec, best.config, data_profile, train_path, test_path, fallback_path)
+    print(f"refit_and_predict finished in {time.time()-t0:.1f}s")
     print(f"\nrefit_and_predict -> {pred_result.status}, rows={pred_result.n_rows}, checks={pred_result.checks_passed}")
     print(f"submission written to {fallback_path}")
 

@@ -52,10 +52,29 @@ ml_core/
   training.py               run_experiment() — leak-safe CV loop, soft time-budget check between folds
   prediction.py              refit_and_predict(), write_fallback_submission()
   experiment_log.py          append-only jsonl ledger, select_best()
-tests/     28 tests: contracts, metrics, validation, preprocessing leakage, training, prediction format
+tests/     29 tests: contracts, metrics, validation, preprocessing leakage, training, prediction format
 examples/  two runnable, no-LLM demonstrations on the real competition data
 docs/CONTRACTS.md  the integration contract for the other two teammates
 ```
+
+## Read this before wiring up the agent: `profile_data` never cleans anything
+
+`profiling.profile_data(...)` is read-only. It flags things — missing
+values, duplicates, unseen test categories, a column that might be a
+disguised time/group id — it does **not** drop rows, impute values, or touch
+`train.csv`/`test.csv` in any way, ever. Concretely: it flags **29,342 fully
+duplicated rows (a third of the whole classification train set!)** and
+leaves every one of them in place, on purpose — see "Real findings" below
+for why that's a deliberate call, not an oversight.
+
+If the agent decides something in `DataProfile.warnings` should actually be
+acted on (drop duplicates, cap outliers, whatever), that has to be an
+explicit step it takes — currently there is no built-in dedup/outlier-removal
+step (`ExperimentConfig.feature_steps` is reserved for exactly this but
+nothing is implemented behind it yet). Also: the "looks like a time/group
+column" heuristic has a confirmed false positive on the real data (`swin`/
+`dwin` in the classification task — see below) — treat every warning as "go
+look", not as "this is true". Full details: [docs/CONTRACTS.md](docs/CONTRACTS.md).
 
 ## Real findings from profiling the provided data (not hypothetical)
 
@@ -88,6 +107,14 @@ These drove concrete design decisions, not just EDA prose:
   (`tests/test_metrics.py::test_macro_f1_is_computed_over_the_full_fixed_label_set`).
   Measured: CatBoost macro F1 ≈ **0.537 ± 0.006** vs. a most-frequent-class
   baseline of 0.048.
+
+- **Same classification task — a confirmed false positive from the
+  time/group-column heuristic.** It also flags `swin`/`dwin`, but they're
+  just near-constant TCP-window-size features (>99.9% of rows are `0` or
+  `255`); the handful of other values each occur exactly once, so train/test
+  disagreeing on them is noise, not a real signal. Don't trust a flag without
+  checking the column — this is exactly why `profile_data` reports instead of
+  acting.
 
 - **The data dictionary's declared dtype is sometimes wrong.** `is_ftp_login`
   is declared `binary` but actually takes values `{0, 1, 2, 4}`. `profile_data`

@@ -50,7 +50,29 @@ pred_result = prediction.refit_and_predict(task_spec, config, data_profile, trai
    `Year_Factor` (train ∈ {1..5}, test ∈ {6} exactly) — see README for the
    concrete effect that has on validation honesty. It also has occasional
    false positives on columns with high missingness or just few categories
-   sampled unevenly; treat it as a prompt to look, not a verdict.
+   sampled unevenly; treat it as a prompt to look, not a verdict. Confirmed
+   false positive on the real multiclass task: `swin`/`dwin` get flagged, but
+   they're just near-constant TCP-window-size features (>99.9% of rows are
+   `0` or `255`) whose handful of other values each occur exactly once —
+   train/test disagreeing on those one-off values is noise, not a real
+   temporal/group signal. Compare against the genuine hit on the same task
+   (`state`, below) before trusting a flag.
+
+   **`profile_data` only *reports* — it never modifies, drops, or imputes
+   anything, on disk or anywhere else.** Concretely, for both real tasks it
+   flags a large number of fully duplicated rows (33 in the regression
+   train.csv, **29,342 — a third of all rows** — in the classification
+   train.csv) and does not remove a single one. That's deliberate, not an
+   oversight: for the classification task specifically, repeated network
+   flows with identical feature values are a plausible property of the
+   domain, not obviously noise, and the rarest class (`Worms`) has only 65
+   rows total — an automatic dedup could silently delete exactly the signal
+   that matters most. If your agent decides duplicates (or outliers, or
+   anything else) should be removed, that has to be an explicit, logged
+   hypothesis your agent makes — e.g. a preprocessing/feature step you add
+   (see `ExperimentConfig.feature_steps`, currently just a placeholder list —
+   no dedup/outlier-removal step is implemented yet), never something that
+   happens for you inside `profile_data` or `run_experiment`.
 
 3. **`validation.create_validation(...) -> ValidationPlan`** — persists fold
    row-positions to an `.npz` file plus a fingerprint of the train file used.
@@ -91,6 +113,19 @@ pred_result = prediction.refit_and_predict(task_spec, config, data_profile, trai
    process after 3 hours, so a guaranteed-valid file should exist on disk as
    early as possible, then get overwritten by better ones as the research
    loop finds them.
+
+   Note on refitting a boosted tree model on the *entire* training set (not
+   a CV fold): it genuinely takes longer than any single fold did — on the
+   real classification task, ~125s for CatBoost against the ~97s/fold seen
+   during 5-fold CV — and `refit_and_predict` prints nothing while it runs.
+   This is exactly the atomic-write design paying off: if the caller is
+   killed mid-refit (by a human assuming the process hung, or by the
+   platform's own timeout), the previous file at that path — the fallback,
+   or an earlier better submission — is untouched, never corrupted or
+   half-written. Observed firsthand building this: a terminal that looks
+   frozen for ~2 minutes during the final refit is normal, not a bug: don't
+   interrupt it, and if the agent/infra loop logs progress, log something
+   right before this call so a human watching doesn't assume a hang.
 
 ## Contract objects (see `ml_core/contracts.py` for the authoritative, typed definitions)
 

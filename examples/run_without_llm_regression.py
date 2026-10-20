@@ -84,7 +84,10 @@ def main() -> None:
     print(f"\nbest: {best.config.model_name} rmse={best.metric_value:.3f}")
 
     out_path = RUN_DIR / "submission.csv"
+    print(f"\nrefitting {best.config.model_name} on the full train set and predicting test (prints nothing while it runs)...")
+    t0 = time.time()
     pred_result = prediction.refit_and_predict(task_spec, best.config, data_profile, train_path, test_path, out_path)
+    print(f"refit_and_predict finished in {time.time()-t0:.1f}s")
     print(f"\nrefit_and_predict -> {pred_result.status}, rows={pred_result.n_rows}, checks={pred_result.checks_passed}")
     print(f"submission written to {out_path}")
 
