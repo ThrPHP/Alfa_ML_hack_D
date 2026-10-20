@@ -19,9 +19,10 @@ def _settings():
     return ResearchSettings(max_rounds=4, hypotheses_per_round=3, n_jobs=1, safety_margin_s=5)
 
 
-def test_research_without_llm_writes_a_valid_submission_and_report(regression_dataset, tmp_path):
+def test_research_without_llm_writes_a_valid_submission_and_report(regression_dataset, tmp_path, monkeypatch):
     task_md = _task_md(regression_dataset, "# Задача\nМетрика оценки — **MAE**.\n")
-    report = run_research(task_md, time.time() + 300, llm=None, work_dir=tmp_path / "work", settings=_settings())
+    monkeypatch.chdir(tmp_path)  # a relative work_dir must survive the subprocess worker's other cwd
+    report = run_research(task_md, time.time() + 300, llm=None, work_dir="work", settings=_settings())
 
     assert report.status == "ok", report.error
     assert report.metric_name == "mae" and report.metric_source == "task.md"

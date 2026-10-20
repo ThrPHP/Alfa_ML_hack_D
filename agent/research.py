@@ -588,8 +588,9 @@ def run_research(
     report = ResearchReport(task_md=str(task_md))
     try:
         files = locate_task_files(task_md)
-        out = Path(out_path) if out_path else files.default_submission_path
-        work = Path(work_dir) if work_dir else files.task_dir / "agent_work"
+        # absolute: SubprocessExecutor runs its worker in another cwd
+        out = Path(out_path).resolve() if out_path else files.default_submission_path
+        work = Path(work_dir).resolve() if work_dir else files.task_dir / "agent_work"
         work.mkdir(parents=True, exist_ok=True)
         client = LLMClient.from_env() if llm == "env" else llm
         researcher = _Researcher(
