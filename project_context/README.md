@@ -11,8 +11,12 @@
 | [decisions.md](decisions.md) | принятые решения и почему |
 | [status.md](status.md) | что сделано, измеренные результаты, известные ограничения |
 | [next_steps.md](next_steps.md) | что делать дальше, по порядку |
+| [repo_map.md](repo_map.md) | что где лежит в репозитории, кто владелец, что получается после прогона |
+| [handoff.md](handoff.md) | что считаем готовым результатом нашей части и когда передаём команде |
 | [environment.md](environment.md) | облачное окружение: ключ, переменные, установка зависимостей |
 | [pitfalls.md](pitfalls.md) | **где теряли время и контекст** — прочитать до первых команд |
+
+Презентация решения со схемами: [docs/presentation/agent_deck.html](../docs/presentation/agent_deck.html).
 
 Технические контракты:
 - [docs/CONTRACTS.md](../docs/CONTRACTS.md) — ml_core (Тима): объекты, операции, гарантии.

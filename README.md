@@ -1,5 +1,8 @@
 # ml_core — ML backend for the AutoResearch agent
 
+> Карта репозитория (что где лежит, для человека и LLM): [project_context/repo_map.md](project_context/repo_map.md) ·
+> презентация решения: [docs/presentation/agent_deck.html](docs/presentation/agent_deck.html) · вход для LLM-ассистентов: [AGENTS.md](AGENTS.md)
+
 My part of the hackathon team's agent: a plain Python package that profiles
 a tabular ML task, builds an honest validation split, trains/evaluates one
 hypothesis at a time, and produces a checked, atomically-written
